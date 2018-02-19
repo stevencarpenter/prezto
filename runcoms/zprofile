@@ -61,3 +61,54 @@ export LESS='-F -g -i -M -R -S -w -X -z-4'
 if (( $#commands[(i)lesspipe(|.sh)] )); then
   export LESSOPEN="| /usr/bin/env $commands[(i)lesspipe(|.sh)] %s 2>&-"
 fi
+
+# Start ssh-agent to keep you logged in with keys, use `ssh-add` to log in
+agent=`pgrep ssh-agent -u $USER` # get only your agents
+if [[ "$agent" == "" || ! -e ~/.ssh/.agent_env ]]; then
+    # if no agents or environment file is missing create a new one
+    # remove old agents / environment variable files
+    [[ "${agent}" != "" ]] && kill $agent
+    [[ -e ~/.ss/.agent_env ]] && rm -f ~/.ssh/.agent_env
+
+    # restart
+    eval `ssh-agent`
+    echo 'export SSH_AUTH_SOCK'=$SSH_AUTH_SOCK >> ~/.ssh/.agent_env
+    echo 'export SSH_AGENT_PID'=$SSH_AGENT_PID >> ~/.ssh/.agent_env
+
+    find $HOME/.ssh -type f -name '*.pem' -exec ssh-add {} \;
+fi
+
+# create our own hardlink to the socket (with random name)
+source ~/.ssh/.agent_env
+MYSOCK=/tmp/ssh_agent.${RANDOM}.sock
+ln $SSH_AUTH_SOCK $MYSOCK
+export SSH_AUTH_SOCK=$MYSOCK
+
+end_agent()
+{
+    # if we are the last holder of a hardlink, then kill the agent
+    nhard=`ls -l $SSH_AUTH_SOCK | awk '{print $2}'`
+    if [[ "$nhard" -eq 2 ]]; then
+        rm -f ~/.ssh/.agent_env
+        ssh-agent -k
+    fi
+    rm -f $SSH_AUTH_SOCK
+}
+trap end_agent EXIT
+set +x
+
+# This allows for running aws-cli commands securely
+## Usage: `awv staging aws s3 ls`
+function awv() {
+    local profile=$1;
+    shift;
+    aws-vault exec $profile -- aws $*; }
+ 
+# This allows for logging into the AWS console as a federated user via your IAM keys instead of the console password.
+## Usage: `awslogin staging`
+function awslogin() { aws-vault login $@; }
+ 
+# This creates a new shell session with the correct environment variables set so you can run SDK programs without issue.
+# Note `-il` will run all your normal Login and BashRC files. (interactive, login flags)
+## Usage: `awsshell staging`
+function awsshell() { aws-vault exec $1 -- $SHELL -il;  }
